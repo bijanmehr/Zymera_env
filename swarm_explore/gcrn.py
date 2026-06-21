@@ -79,7 +79,7 @@ def collect_traj(grid, n, steps, seed):
         inp, adjb = step_inputs(pos, adj, comps, n)
         INP.append(inp); ADJB.append(adjb); TRUE.append(adj.astype(np.float32))
         # behavior: compass + degree-floor relay (floor 1) -> diverse spread/fragment data
-        floor = 1; act = np.zeros(n, int)
+        deg = adj.sum(1); floor = 1; act = np.zeros(n, int)
         for i in range(n):
             for j in range(n):
                 if adj[i, j]: npos[i][j] = (int(pos[j, 0]), int(pos[j, 1]))
