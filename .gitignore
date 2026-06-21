@@ -24,6 +24,9 @@ experiments/*
 !experiments/__init__.py
 !experiments/run_overnight.py
 !experiments/jobs.py
+!experiments/_pareto_worker.py
+!experiments/_es_worker.py
+!experiments/report.py
 
 # stray rendered media (examples/ render outputs, etc.)
 examples/**/*.gif
