@@ -1,0 +1,30 @@
+# ── virtual environments ───────────────────────────────
+.venv/
+venv/
+env/
+
+# ── python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+
+# ── os / editor ────────────────────────────────────────
+.DS_Store
+*.swp
+
+# ── experiment outputs (run artifacts — never pushed) ──
+experiments/
+
+# stray rendered media (examples/ render outputs, etc.)
+examples/**/*.gif
+examples/**/*.mp4
+*.gif
+*.npz
+*.eqx

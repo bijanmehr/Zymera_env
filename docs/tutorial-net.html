@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tutorial 2 · A network to control the agent — Zymera</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+<h1><a href="index.html">Zymera</a></h1>
+<div class="subtitle">JAX multi-agent env library</div>
+<nav>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="tutorial-env.html">1 · Environment</a></li>
+<li><a href="tutorial-net.html" class="active">2 · Control network</a></li>
+</ul>
+</nav>
+</aside>
+<main class="content">
+<article>
+<h1 id="net">Tutorial 2 · A network to control the agent</h1>
+<p>We put a neural network in charge of the agents and train it. The whole
+thing is one runnable file —
+<code>examples/learn_template.py</code> — and this page walks through it
+piece by piece. The shape of every interface (obs, the step tuple, the
+trajectory) is from <a href="tutorial-env.html">Tutorial 1</a>. In
+<a href="https://www.marl-book.com/">MARL-textbook</a> terms: a policy
+network π<sub>i</sub> trained by policy gradient (Ch&nbsp;2,&nbsp;8).</p>
+
+<p>The pipeline is a loop of five parts. You write the three in the middle;
+the env and rollout are given:</p>
+<pre><code>   env ──reset──► obs ──► [ NETWORK ] ──► action ──► step ──► trajectory
+                                                                  │
+                          ┌──────────────────────────────────────┘
+                          ▼
+                  [ REWARD ] ──► [ LOSS ] ──► grad ──► optax update ──► better network
+                                                                              │
+                          ◄───────────────── repeat ──────────────────────────┘</code></pre>
+
+<h2 id="env">The env (use the pure-JAX one)</h2>
+<p>Training drives the env through <code>rollout</code>, which traces it
+inside <code>lax.scan</code>. So use the pure-JAX env — keep
+<code>sense_radius=0</code> (the default). The occlusion <code>Sensor</code>
+is host-side and can't be traced; it's for the Python-loop agents, not for
+training.</p>
+<pre><code>import jax, jax.numpy as jnp, equinox as eqx, optax, zymera
+env = zymera.make("empty-v0", grid_h=12, grid_w=12, n_agents=2)   # sense_radius=0</code></pre>
+
+<h2 id="network">The network — a policy is a callable <code>obs → action</code></h2>
+<p>The env only asks for a callable <code>policy(obs, key) → (N,)
+int32</code>. A network is just a fancier one: run an MLP per agent to get
+logits, sample an action.</p>
+<pre><code>class Policy(eqx.Module):
+    net: eqx.nn.MLP
+    def __init__(self, obs_dim, n_actions, key):
+        self.net = eqx.nn.MLP(obs_dim, n_actions, width_size=64, depth=2, key=key)
+    def __call__(self, obs, key):                 # obs (N, obs_dim) -> (N,) int32
+        logits = jax.vmap(self.net)(obs)          # (N, n_actions)   per-agent logits
+        return jax.random.categorical(key, logits, axis=-1).astype(jnp.int32)
+
+policy = Policy(env.obs_dim, env.n_actions, jax.random.PRNGKey(0))</code></pre>
+<p>One shared MLP runs on each agent's obs row independently
+(<code>jax.vmap</code>). The same <code>net</code> gives the logits the loss
+needs later.</p>
+
+<h2 id="rollout">Collect experience — <code>rollout</code></h2>
+<p><code>rollout</code> runs the policy for <code>n_steps</code> and stacks
+everything into a trajectory pytree:</p>
+<pre><code>traj = zymera.rollout(env, policy, n_steps=64, key=key)
+
+traj["world"]    # World pytree, leaves (T+1, ...)   — every state along the way
+traj["obs"]      # (T+1, N, obs_dim)                 — what the policy saw
+traj["action"]   # (T,   N)      int32               — what it did
+traj["reward"]   # (T,   N)      float32             — ZEROS (env has no reward)
+traj["done"]     # (T,   N)      bool</code></pre>
+<p>Note the alignment: <code>action[t]</code> was chosen from
+<code>obs[t]</code>, so <code>traj["obs"][:-1]</code> pairs with
+<code>traj["action"]</code> — the loss uses exactly that.</p>
+
+<h2 id="reward">The reward — your objective, from the trajectory</h2>
+<p>The env's reward is zeros: <strong>you</strong> define the objective, as a
+function of the trajectory. Here: drive the agents to the bottom-right
+corner — reward each agent for getting closer each step.</p>
+<pre><code>GRID, GOAL = 12, (11, 11)
+
+def reward_fn(traj):                              # -> (T, N) float32
+    pos  = traj["world"].body.position.astype(jnp.float32)        # (T+1, N, 2)
+    dist = jnp.abs(pos - jnp.array(GOAL, jnp.float32)).sum(-1)    # (T+1, N) Manhattan
+    return dist[:-1] - dist[1:]                                   # closer = positive</code></pre>
+<blockquote>
+<p>What's learnable depends on the obs. <code>[row, col, coverage]</code> is
+enough to learn "go to the corner", but NOT to learn good <em>coverage</em>
+— the policy can't see where it hasn't been. For that, give it a richer obs
+(override <code>sense</code> in a custom env, see Tutorial 1).</p>
+</blockquote>
+
+<h2 id="loss">The loss — REINFORCE</h2>
+<p>Pull up the log-probability of actions that led to high return. Recompute
+logits on the stored obs, gather the taken actions, weight by the
+(normalised) discounted return:</p>
+<pre><code>def discounted_returns(rewards, gamma=0.99):      # (T, N) -> (T, N)
+    def step(carry, r): carry = r + gamma * carry; return carry, carry
+    _, g = jax.lax.scan(step, jnp.zeros_like(rewards[0]), rewards[::-1])
+    return g[::-1]
+
+def loss_fn(policy, traj):
+    obs, act = traj["obs"][:-1], traj["action"]   # (T, N, od), (T, N)
+    T, N, od = obs.shape
+    logits = jax.vmap(policy.net)(obs.reshape(T * N, od)).reshape(T, N, -1)
+    logp   = jax.nn.log_softmax(logits, axis=-1)
+    chosen = jnp.take_along_axis(logp, act[..., None], axis=-1)[..., 0]   # (T, N)
+
+    G = discounted_returns(reward_fn(traj))
+    G = (G - G.mean()) / (G.std() + 1e-8)         # variance-reducing baseline
+    return -jnp.mean(chosen * G)                  # REINFORCE objective</code></pre>
+
+<h2 id="loop">Putting it together — the training step + loop</h2>
+<p>One jitted step: roll out, differentiate the loss w.r.t. the network,
+apply an optax update. Then loop.</p>
+<pre><code>opt = optax.adam(3e-3)
+opt_state = opt.init(eqx.filter(policy, eqx.is_array))
+
+@eqx.filter_jit
+def train_step(policy, opt_state, key):
+    traj = zymera.rollout(env, policy, 64, key)               # collect
+    loss, grads = eqx.filter_value_and_grad(loss_fn)(policy, traj)
+    updates, opt_state = opt.update(grads, opt_state)         # optimise
+    policy = eqx.apply_updates(policy, updates)
+    return policy, opt_state, loss
+
+for it in range(200):
+    key, sk = jax.random.split(key)
+    policy, opt_state, loss = train_step(policy, opt_state, sk)</code></pre>
+<p>Run <code>examples/learn_template.py</code> and the agents learn to reach
+the corner — average distance falls to zero:</p>
+<pre><code>iter   0   avg dist to goal  8.00
+iter  20   avg dist to goal  4.00
+iter  40   avg dist to goal  2.00
+iter  60   avg dist to goal  0.00   (arrived)</code></pre>
+
+<h2 id="swap">Swapping machinery</h2>
+<p>To try something different, edit one box — everything else stays:</p>
+<table>
+<colgroup><col style="width:34%"><col style="width:66%"></colgroup>
+<thead><tr><th>to change…</th><th>edit…</th></tr></thead>
+<tbody>
+<tr><td>architecture</td><td>the <code>Policy</code> module (MLP → CNN → RNN…)</td></tr>
+<tr><td>algorithm (PG → actor-critic, PPO…)</td><td><code>loss_fn</code>, on the same <code>traj</code></td></tr>
+<tr><td>objective</td><td><code>reward_fn</code> over <code>traj</code></td></tr>
+</tbody>
+</table>
+<p>And to run many seeds at once, <code>vmap</code> the rollout:</p>
+<pre><code>keys = jax.random.split(key, 8)
+batch = jax.vmap(lambda k: zymera.rollout(env, policy, 64, k))(keys)
+batch["action"].shape       # (8, 64, n_agents)</code></pre>
+</article>
+</main>
+</div>
+</body>
+</html>

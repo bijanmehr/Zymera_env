@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tutorial 1 · The environment — Zymera</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+<h1><a href="index.html">Zymera</a></h1>
+<div class="subtitle">JAX multi-agent env library</div>
+<nav>
+<ul>
+<li><a href="index.html">Home</a></li>
+<li><a href="tutorial-env.html" class="active">1 · Environment</a></li>
+<li><a href="tutorial-net.html">2 · Control network</a></li>
+</ul>
+</nav>
+</aside>
+<main class="content">
+<article>
+<h1 id="env">Tutorial 1 · The environment</h1>
+<p>Make a world, change its settings, add agents, and read what an agent
+perceives. Every snippet runs as-is. When you're ready to put a learned
+network in control, go to <a href="tutorial-net.html">Tutorial 2</a>.</p>
+<p>In the language of the <a href="https://www.marl-book.com/">MARL
+textbook</a> (Ch&nbsp;3) this is a partially observable multi-agent
+environment — a <em>POSG</em>, or a <em>Dec-POMDP</em> when the agents share
+one reward; each agent receives its own observation o<sub>i</sub>.</p>
+
+<h2 id="make">Create a world &amp; change its settings</h2>
+<p>One factory call gives you a gym-style env. <code>reset</code> returns
+<code>(obs, state)</code>.</p>
+<pre><code>import jax, zymera
+key = jax.random.PRNGKey(0)
+
+env = zymera.make("empty-v0", grid_h=8, grid_w=8, n_agents=1)
+obs, state = env.reset(key)</code></pre>
+<p>The world is a grid of cells. Agents and walls sit on it, each
+addressed by <code>(row, col)</code> — <code>row</code> grows
+<em>downward</em>:</p>
+<pre><code>            col →   0    1    2    3
+    row 0           ·    ·    #    ·
+     │   1          ·    A    ·    ·
+     ▼   2          ·    ·    ·    ·
+
+    A = agent at (row=1, col=1)     # = wall     · = free cell</code></pre>
+<p>Every setting is a keyword to <code>make</code>:</p>
+<pre><code>env = zymera.make("empty-v0",
+                  grid_h=16, grid_w=16,   # world size
+                  n_agents=4,             # number of agents
+                  n_obstacles=20,         # random walls (or wall=<HxW bool mask>)
+                  sense_radius=3,         # per-agent view; 0 = no sensor (default)
+                  occlusion=True)         # walls block line of sight</code></pre>
+<table>
+<colgroup><col style="width:26%"><col style="width:74%"></colgroup>
+<thead><tr><th>setting</th><th>effect</th></tr></thead>
+<tbody>
+<tr><td><code>grid_h</code>, <code>grid_w</code></td><td>grid dimensions</td></tr>
+<tr><td><code>n_agents</code></td><td>how many agents (drives every shape — see below)</td></tr>
+<tr><td><code>n_obstacles</code> / <code>wall</code></td><td>random count, or an explicit <code>(H,W)</code> bool mask</td></tr>
+<tr><td><code>sense_radius</code> / <code>occlusion</code></td><td>attach a partial-obs <code>Sensor</code> (see <a href="#perception">What the agent perceives</a>)</td></tr>
+</tbody>
+</table>
+
+<h2 id="agents">Agents &amp; config</h2>
+<p><code>n_agents</code> sets every per-agent shape; nothing else to wire.</p>
+<pre><code>import jax.numpy as jnp
+env = zymera.make("empty-v0", grid_h=12, grid_w=12, n_agents=8)
+env.n_agents, env.obs_dim, env.n_actions      # → (8, 3, 5)
+
+obs, state = env.reset(key)
+obs.shape                                      # (8, 3)  — one obs row per agent
+state.body.position.shape                      # (8, 2)  — (row, col) per agent
+
+# one ActionId per agent: STAY=0 NORTH=1 EAST=2 SOUTH=3 WEST=4
+action = jnp.full((env.n_agents,), int(zymera.ActionId.EAST), jnp.int32)
+obs, state, reward, done, info = env.step(state, action, key)</code></pre>
+<p>The <code>step</code> return is a 5-tuple — <code>(obs, state, reward,
+done, info)</code>, with <code>reward</code> and <code>done</code> shaped
+<code>(N,)</code>. (<code>reward</code> is zeros — you define the objective
+in <a href="tutorial-net.html">Tutorial 2</a>.)</p>
+<p>For a <strong>controlled config</strong>, pass an explicit obstacle mask
+instead of a random count:</p>
+<pre><code>import numpy as np
+wall = np.zeros((12, 12), bool); wall[4:9, 6] = True     # a vertical bar
+env = zymera.make("empty-v0", grid_h=12, grid_w=12, n_agents=2, wall=wall)</code></pre>
+
+<h2 id="state">The state pytree</h2>
+<p><code>state</code> is one JAX pytree — it threads through <code>jit</code> /
+<code>vmap</code> / <code>lax.scan</code> unchanged. Its fields:</p>
+<table>
+<colgroup><col style="width:30%"><col style="width:20%"><col style="width:50%"></colgroup>
+<thead><tr><th>field</th><th>shape</th><th>what</th></tr></thead>
+<tbody>
+<tr><td><code>state.body.position</code></td><td><code>(N,2)</code> int32</td><td>per-agent <code>(row, col)</code></td></tr>
+<tr><td><code>state.explored</code></td><td><code>(H,W)</code> int32</td><td>per-cell visit count</td></tr>
+<tr><td><code>state.step_count</code></td><td><code>()</code> int32</td><td>ticks since reset</td></tr>
+<tr><td><code>state.wall</code></td><td><code>(H,W)</code> bool</td><td>obstacles (movement enforces them)</td></tr>
+<tr><td><code>state.seen_by</code></td><td><code>(N,H,W)</code> bool</td><td>per-agent visibility — filled only in the host-side <code>Sensor</code> path (<code>sense_radius ≥ 1</code>); never during training/rollout</td></tr>
+<tr><td><code>state.comm_graph</code></td><td><code>(N,N)</code> bool</td><td>adjacency (placeholder for now)</td></tr>
+</tbody>
+</table>
+
+<h2 id="perception">What the agent perceives</h2>
+<p>"Observation" means two different things in zymera — read both off one
+concrete world:</p>
+<p><strong>The world.</strong> A 5×5 grid. Our agent <code>A</code> stands
+at <code>(row 2, col 1)</code>. Two cells are walls. Four cells have been
+visited so far (the three marked <code>°</code> plus the cell <code>A</code>
+is standing on):</p>
+<pre><code>           col  0    1    2    3    4
+    row 0   ·    ·    ·    ·    ·
+    row 1   °    ·    #    ·    ·
+    row 2   °    A    #    ·    ·
+    row 3   °    ·    ·    ·    ·
+    row 4   ·    ·    ·    ·    ·
+
+    A = agent      # = wall      ° = already visited      · = free, unvisited</code></pre>
+
+<h3>Observation #1 — <code>obs</code> (what a <em>learning policy</em> sees)</h3>
+<p>Each step, <code>reset</code> / <code>step</code> hand your policy a
+<strong>tiny fixed vector — 3 numbers per agent</strong>. For our agent you
+read them straight off the picture:</p>
+<pre><code>obs  =  [ 2.0 ,  1.0 ,  0.16 ]
+          │      │       │
+          row    col     coverage  =  4 of 25 cells visited  =  0.16
+          └─ where the agent is ─┘   (one global number, the SAME for every agent)</code></pre>
+<p>That is the <em>entire</em> learning input for <code>"empty-v0"</code>:
+<em>where am I</em> + <em>how much of the map is done</em>. Look at what is
+<strong>not</strong> there — the policy does <u>not</u> see the walls, its
+neighbours, or where other agents are. It's a deliberately thin signal you
+train a network against.</p>
+
+<h3>Observation #2 — the <code>Sensor</code> reading (what a <em>hand-written agent</em> sees)</h3>
+<p>An agent in a Python loop can instead ask the <code>Sensor</code> what's
+<em>around</em> it. With <code>sense_radius=2</code> it gets the occupancy of
+every cell within 2 steps. Marking each sensed cell <code>s</code> on the
+same world:</p>
+<pre><code>           col  0    1    2    3    4
+    row 0   ·    s    ·    ·    ·
+    row 1   s    s    #    ·    ·       s = a cell the Sensor reports back
+    row 2   s    A    #    s    ·       # = wall  → reported BLOCKED
+    row 3   s    s    s    ·    ·       A = agent (it also senses one cell off
+    row 4   ·    s    ·    ·    ·            the grid to its far west → an edge)</code></pre>
+<p>The reading is just a dictionary, <code>{cell: blocked}</code>, where
+<code>blocked = True</code> means "wall or off-grid — can't step there" and
+<code>False</code> means "free — I could step here":</p>
+<pre><code>env.sensor.observe_one(state, 0)  →  {
+    (0,1): False,  (1,0): False,  (1,1): False,    # free  → I could go here
+    (2,0): False,  (2,3): False,  (3,0): False,
+    (3,1): False,  (3,2): False,  (4,1): False,
+    (1,2): True,   (2,2): True,                     # the two walls  → blocked
+    (2,-1): True,                                   # off the grid   → blocked
+}</code></pre>
+<p>This is what a reactive agent runs on (see <code>examples/lawn_mower.py</code>).
+It's purely <em>local</em>: the agent never gets the grid size or the wall
+map — only "what's blocked right around me", rebuilt every step.</p>
+
+<h3>Sense range — <code>sense_radius</code></h3>
+<p>The example above used <code>sense_radius=2</code>. The radius is simply
+how big that disk of sensed cells is — a Euclidean disk around the agent.
+Bigger radius → more cells reported each step → less guessing:</p>
+<pre><code>  radius 1 (4 cells)     radius 2 (12 cells)        radius 3 (28 cells)
+
+      ·  X  ·             ·  ·  X  ·  ·              ·  ·  ·  X  ·  ·  ·
+      X  A  X             ·  X  X  X  ·              ·  X  X  X  X  X  ·
+      ·  X  ·             X  X  A  X  X              ·  X  X  X  X  X  ·
+                          ·  X  X  X  ·              X  X  X  A  X  X  X
+                          ·  ·  X  ·  ·              ·  X  X  X  X  X  ·
+                                                     ·  X  X  X  X  X  ·
+                                                     ·  ·  ·  X  ·  ·  ·
+
+   A = agent     X = a cell the Sensor reports     blocked = wall OR off-grid</code></pre>
+
+<h3>Occlusion — do walls block the view?</h3>
+<p><code>occlusion=True</code> makes walls cast shadows: a cell is sensed
+only if the straight line to it is clear (you see the wall's face, not what
+is behind it). <code>occlusion=False</code> is an x-ray disk.</p>
+<pre><code>   occlusion OFF (x-ray)            occlusion ON (line of sight)
+
+     ·  ·  ·  ·  ·  ·  ·               ·  ·  ·  ·  ·  ·  ·
+     ·  ·  ·  ·  ·  ·  ·               ·  ·  ·  ·  ·  ?  ?
+     ·  ·  ·  A  #  ·  ·               ·  ·  ·  A  #  ?  ?     # blocks the view;
+     ·  ·  ·  ·  ·  ·  ·               ·  ·  ·  ·  ·  ?  ?     cells behind it (?)
+     ·  ·  ·  ·  ·  ·  ·               ·  ·  ·  ·  ·  ·  ·     are unknown
+
+   A = agent     # = wall     ? = shadowed (reported as unknown / absent)</code></pre>
+<blockquote>
+<p>The <code>Sensor</code> is a host-side tool for Python-loop agents, not
+for training — <a href="tutorial-net.html">Tutorial 2</a> explains why
+training uses the pure-JAX env.</p>
+</blockquote>
+
+<h2 id="custom">A custom world</h2>
+<p>Need different dynamics or a richer <code>obs</code>? Subclass
+<code>zymera.Env</code> and register it:</p>
+<pre><code>class MyEnv(zymera.Env):
+    def __init__(self, grid_h=12, grid_w=12, n_agents=3):
+        super().__init__(n_agents=n_agents)
+        self.grid_h, self.grid_w = grid_h, grid_w
+    def reset(self, key):
+        state = zymera.World.initial(key, self.grid_h, self.grid_w, self.n_agents)
+        return state.sense(), state         # customise obs by overriding sense
+    # step is inherited
+
+zymera.register_env("my-env-v0", MyEnv)
+env = zymera.make("my-env-v0", n_agents=2)</code></pre>
+</article>
+</main>
+</div>
+</body>
+</html>
