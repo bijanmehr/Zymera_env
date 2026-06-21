@@ -19,12 +19,11 @@ dist/
 .DS_Store
 *.swp
 
-# ── experiment outputs (run artifacts — never pushed); harness *.py under experiments/ IS tracked ──
-experiments/runs/
-experiments/status.json
-experiments/STATUS.html
-experiments/bench.py
-experiments/*.log
+# ── everything under experiments/ is run-output (ignored) EXCEPT the named harness files ──
+experiments/*
+!experiments/__init__.py
+!experiments/run_overnight.py
+!experiments/jobs.py
 
 # stray rendered media (examples/ render outputs, etc.)
 examples/**/*.gif
