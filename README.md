@@ -8,6 +8,17 @@ This is the **engine layer** of the broader *Zymera* research program on covert 
 and mission resilience in cooperative swarms (codename *RedWithinBlue* — a covert adversary inside a
 cooperative team).
 
+## About
+
+Zymera_env is **active research code** — part of an ongoing project on adversarial robustness and
+resilience in cooperative multi-agent / swarm systems. It is **work in progress**: interfaces,
+experiments, and structure change frequently as the research evolves, so expect things to move (and
+occasionally break) between commits.
+
+This repository **supersedes** the earlier project
+[**RedWithinBlue**](https://github.com/bijanmehr/RedWithinBlue), which is **no longer used** — the work
+has been migrated and consolidated here.
+
 ---
 
 ## Install
