@@ -28,6 +28,8 @@ experiments/*
 !experiments/_es_worker.py
 !experiments/report.py
 !experiments/marl_tournament.py
+!experiments/_relay_es_worker.py
+!experiments/relay_mission_spec.md
 
 # stray rendered media (examples/ render outputs, etc.)
 examples/**/*.gif

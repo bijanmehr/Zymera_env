@@ -253,6 +253,93 @@ def method_tournament(ctx, methods, scales, seeds, envs, iters):
                best_cov=round(max((r["cov"] for r in results), default=0.0), 3))
 
 
+# ============================================================ H · relay-mission (emergent explorer/relay)
+def relay_mission(ctx, regimes, scales, seeds, gens, pop, sigma, alpha, w_conn, decay, steps_map):
+    """ES-train ONE size-invariant explorer/relay controller per regime (A=hard backstop /
+    coverage-under-connectivity, B=soft / latency-discounted delivery), domain-randomized over
+    scales; eval vs the heuristic baseline; render GIFs. The headline coverage↔connectivity +
+    emergent-roles experiment. Fitness evals fan out across CPU cores."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from swarm_explore import arch3, gif
+    from swarm_explore.relay_mission import rollout_mission, make_theta_policy, heuristic_policy
+    from swarm_explore.core import random_wall
+    from experiments._relay_es_worker import eval_one
+
+    workers = min(mp.cpu_count(), 24)
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
+    results = {"scales": [list(s) for s in scales], "regimes": {}}
+    gdir = os.path.join(ctx.dir, "gifs"); os.makedirs(gdir, exist_ok=True)
+    rng = np.random.default_rng(0)
+    try:
+        for regime in regimes:
+            theta = arch3.init_theta(0).astype(np.float64)
+
+            def evaluate(cands, regime=regime):
+                units = [(tid, th, regime, g, n, 5, steps_map[g], s, w_conn, decay)
+                         for (tid, th) in cands for (g, n) in scales for s in range(seeds)]
+                acc = collections.defaultdict(list)
+                for r in pool.map(eval_one, units, chunksize=2):
+                    acc[r[0]].append(r[1])
+                return {tid: float(np.mean(v)) for tid, v in acc.items()}
+
+            ctx.log(f"[{regime}] ES: {gens} gens x {2*pop} pop x {seeds} seeds over {scales} on {workers} cores")
+            hist = []
+            for gnum in range(gens):
+                eps = rng.normal(0, 1, (pop, theta.size)); eps = np.concatenate([eps, -eps], 0)
+                fits = evaluate([(k, theta + sigma * eps[k]) for k in range(len(eps))])
+                F = np.array([fits[k] for k in range(len(eps))])
+                A = (F - F.mean()) / (F.std() + 1e-8)
+                theta = theta + alpha * (eps.T @ A) / (len(eps) * sigma)
+                cur = evaluate([("cur", theta)])["cur"]; hist.append(round(cur, 4))
+                if gnum % max(1, gens // 6) == 0 or gnum == gens - 1:
+                    ctx.log(f"[{regime}] gen {gnum:2d}: fit {cur:.3f}")
+            np.save(os.path.join(ctx.dir, f"theta_{regime}.npy"), theta)
+
+            perscale = []
+            for (g, n) in scales:                       # eval learned θ + heuristic baseline per scale
+                E = max(3, seeds); L = np.zeros(5); Hh = np.zeros(5)
+                for s in range(E):
+                    wall = random_wall(g, g, 0.05, 100 + s); hard = (regime == "A"); dc = 1.0 if hard else decay
+                    lm = rollout_mission(g, g, wall, n, 5, 3, steps_map[g], 100 + s, make_theta_policy(theta, n - 2), backstop=hard, decay=dc)
+                    hm = rollout_mission(g, g, wall, n, 5, 3, steps_map[g], 100 + s, heuristic_policy, backstop=hard, decay=dc)
+                    L += [lm["delivered_cov"], lm["raw_cov"], lm["connectivity"], lm["relay_frac"], np.std(lm["per_agent_relay"])]
+                    Hh += [hm["delivered_cov"], hm["raw_cov"], hm["connectivity"], hm["relay_frac"], np.std(hm["per_agent_relay"])]
+                L /= E; Hh /= E
+                k = ("cov", "raw", "conn", "relay", "role_spread")
+                perscale.append(dict(grid=g, n=n,
+                                     learned={kk: round(L[i], 3) for i, kk in enumerate(k)},
+                                     heuristic={kk: round(Hh[i], 3) for i, kk in enumerate(k)}))
+                ctx.log(f"[{regime}] {g}x{g}/N{n}: learned cov {L[0]*100:.0f}% conn {L[2]*100:.0f}% relay {L[3]*100:.0f}% spread {L[4]:.2f} "
+                        f"| heur cov {Hh[0]*100:.0f}% conn {Hh[2]*100:.0f}%")
+            results["regimes"][regime] = dict(history=hist, per_scale=perscale)
+
+            for (g, n) in [scales[0], scales[-1]]:       # GIFs at small + large scale
+                hard = (regime == "A")
+                m = rollout_mission(g, g, random_wall(g, g, 0.05, 2), n, 5, 3, steps_map[g], 2,
+                                    make_theta_policy(theta, n - 2), backstop=hard, decay=(1.0 if hard else decay), record=True)
+                gif.animate_run(m, os.path.join(gdir, f"relay_{regime}_{g}x{g}_n{n}.gif"),
+                                title=f"relay-{regime} {g}x{g}/N{n} · cov {m['delivered_cov']*100:.0f}% conn {m['connectivity']*100:.0f}%")
+    finally:
+        pool.shutdown()
+
+    json.dump(results, open(os.path.join(ctx.dir, "relay_results.json"), "w"), indent=2)
+    best = {}
+    for regime in regimes:
+        big = results["regimes"][regime]["per_scale"][-1]["learned"]
+        best[f"{regime}_big_cov"] = big["cov"]; best[f"{regime}_big_conn"] = big["conn"]
+    ctx.metric(**best)
+
+
+# ============================================================ I · relay PPO arm (structural credit) — scaffold
+def relay_ppo_arm(ctx, **k):
+    ctx.log("SCAFFOLD relay-PPO: the structural-credit arm — per-agent delivered-cell credit split β between")
+    ctx.log("the finder explorer and the CRITICAL relay(s) on the delivery path (load-bearing only).")
+    ctx.log("Plan: wire role+tool+termination policy into PPO with path-credit routing + articulation detection;")
+    ctx.log("tests whether explicit structural credit rescues policy-gradient where AC failed (the ES arm is the de-risked baseline).")
+    ctx.metric(status="scaffold")
+
+
 MANIFEST = [
     {"name": "belief-multiscale", "fn": belief_multiscale,
      "smoke": dict(scales=[(16, 4), (20, 5)], epochs=3, n_train=4, n_test=2, batch=4, steps=40),
@@ -273,5 +360,11 @@ MANIFEST = [
      "smoke": dict(methods=["independent"], scales=[(12, 3, 20)], seeds=1, envs=2, iters=2),
      "gpu":   dict(methods=["independent", "CTDE", "joint", "frontier-attn"],
                    scales=[(16, 4, 80), (24, 6, 100), (32, 10, 120)], seeds=3, envs=16, iters=200)},
+    {"name": "relay-mission", "fn": relay_mission,
+     "smoke": dict(regimes=["A", "B"], scales=[(12, 3), (16, 4)], seeds=1, gens=2, pop=3,
+                   sigma=0.2, alpha=0.1, w_conn=0.5, decay=0.97, steps_map={12: 40, 16: 50}),
+     "gpu":   dict(regimes=["A", "B"], scales=[(16, 4), (24, 6), (32, 10)], seeds=2, gens=25, pop=10,
+                   sigma=0.15, alpha=0.08, w_conn=0.5, decay=0.97, steps_map={16: 120, 24: 200, 32: 280})},
+    {"name": "relay-ppo-arm", "fn": relay_ppo_arm, "smoke": {}, "gpu": {}},
     {"name": "assemble-report", "fn": assemble_report, "smoke": {}, "gpu": {}},
 ]

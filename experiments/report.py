@@ -195,6 +195,53 @@ def build_report(runs, root):
                     f"<table><tr><th>method</th><th>world</th><th>N</th><th>seed</th><th>coverage</th>"
                     f"<th>connectivity</th><th>max-dist</th></tr>{row}</table>"))
 
+    # ───────────────────────── G · relay-mission (emergent explorer/relay) ─────────────────────────
+    rel = _load(runs, "relay-mission", "relay_results.json")
+    if rel and rel.get("regimes"):
+        regimes = list(rel["regimes"].keys())
+        cols = {"A": BLUE, "B": AMBER}
+
+        def fR(axs):
+            ax = axs[0]
+            ax.axvspan(0.95, 1.02, color="#e9f7ef", zorder=0); ax.axhspan(0.90, 1.02, color="#e9f7ef", zorder=0)
+            for rg in regimes:
+                for ps in rel["regimes"][rg]["per_scale"]:
+                    l, h = ps["learned"], ps["heuristic"]
+                    ax.scatter(h["conn"], h["cov"], c=cols.get(rg, GREY), marker="x", alpha=0.55, s=45)
+                    ax.scatter(l["conn"], l["cov"], c=cols.get(rg, GREY), marker="o", s=70, edgecolors="k", linewidths=0.5)
+            ax.set_xlabel("connectivity"); ax.set_ylabel("coverage"); ax.set_xlim(0, 1.02); ax.set_ylim(0, 1.02)
+            ax.grid(alpha=.3); ax.set_title("Pareto: ○ learned · × heuristic (green = 90/95 target)")
+            ax2 = axs[1]
+            for rg in regimes:
+                ps = rel["regimes"][rg]["per_scale"]
+                ax2.plot([p["grid"] for p in ps], [p["learned"]["relay"] for p in ps], marker="o",
+                         color=cols.get(rg, GREY), label=f"regime {rg}")
+            ax2.set_xlabel("world size"); ax2.set_ylabel("relay fraction (learned)"); ax2.set_ylim(0, 1)
+            ax2.legend(fontsize=8); ax2.grid(alpha=.3); ax2.set_title("relays vs scale (emergence)")
+        fig, axs = plt.subplots(1, 2, figsize=(11, 4.4)); fR(axs)
+        fig.tight_layout(); fig.savefig(os.path.join(assets, "relay.png"), dpi=120); plt.close(fig)
+        rows = ""
+        for rg in regimes:
+            for ps in rel["regimes"][rg]["per_scale"]:
+                l = ps["learned"]
+                rows += (f"<tr><td>{rg}</td><td>{ps['grid']}²/{ps['n']}</td><td>{l['cov']*100:.0f}%</td>"
+                         f"<td>{l['conn']*100:.0f}%</td><td>{l['relay']*100:.0f}%</td><td>{l['role_spread']:.2f}</td></tr>")
+        gimg = ""
+        rg_gifs = sorted(glob.glob(os.path.join(runs, "relay-mission", "gifs", "*.gif")))
+        if rg_gifs:
+            gd = os.path.join(assets, "relay_gifs"); os.makedirs(gd, exist_ok=True)
+            for gp in rg_gifs:
+                shutil.copy(gp, os.path.join(gd, os.path.basename(gp)))
+                gimg += f"<img src='report_assets/relay_gifs/{os.path.basename(gp)}' style='width:300px'>"
+        sec.append(("G — Emergent explorer/relay (relay-mission)",
+                    f"<img src='report_assets/relay.png'>"
+                    f"<p class=m>Regime A = hard connectivity (coverage-under-constraint); B = soft + latency-discounted "
+                    f"delivery. ○ learned vs × heuristic baseline; green band = the 90/95 target. Right panel: relay "
+                    f"fraction rising with world size is emergent role allocation. 'role spread' = std of per-agent relay "
+                    f"time (specialization).</p>"
+                    f"<table><tr><th>regime</th><th>world</th><th>coverage</th><th>connectivity</th><th>relay%</th>"
+                    f"<th>role spread</th></tr>{rows}</table><div class=gifs>{gimg}</div>"))
+
     # ───────────────────────── assemble ─────────────────────────
     body = ""
     for title, html_body in sec:
