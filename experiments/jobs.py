@@ -215,6 +215,44 @@ def assemble_report(ctx):
     ctx.metric(sections=n, report=os.path.relpath(out, ROOT))
 
 
+# ============================================================ G · MARL method tournament (GPU, PPO)
+def method_tournament(ctx, methods, scales, seeds, envs, iters):
+    """Train each PPO variant (independent / CTDE / joint / frontier-attn) at each scale × seed
+    on the GPU. Each run is a fresh subprocess (the MARL core fixes scale via module globals at
+    import). Pegs the GPU; per-run failures are isolated; results stream to disk incrementally."""
+    import subprocess
+    import sys
+    outdir = os.path.join(ctx.dir, "marl"); os.makedirs(outdir, exist_ok=True)
+    runs = [(m, g, n, st, s) for m in methods for (g, n, st) in scales for s in range(seeds)]
+    ctx.log(f"{len(runs)} MARL trainings (method × scale × seed) on the GPU, sequential")
+    results = []
+    for i, (m, g, n, st, s) in enumerate(runs):
+        ctx.log(f"[{i+1}/{len(runs)}] {m} @ {g}x{g}/N={n} seed {s} (envs={envs}, iters={iters})…")
+        cmd = [sys.executable, "-m", "experiments.marl_tournament",
+               m, str(g), str(n), str(st), str(envs), str(iters), str(s), outdir]
+        try:
+            p = subprocess.run(cmd, cwd=ROOT, env=dict(os.environ, PYTHONPATH=ROOT),
+                               capture_output=True, text=True, timeout=9000)
+            rj = os.path.join(outdir, f"result_{m}-{g}x{g}-n{n}-s{s}.json")
+            if os.path.exists(rj):
+                r = json.load(open(rj)); results.append(r)
+                ctx.log(f"    cov {r['cov']*100:.0f}%  conn {r['conn']*100:.0f}%  maxd {r['maxd']:.1f}  (iter {r['iter']})")
+            else:
+                err = ((p.stderr or p.stdout or "").strip().splitlines() or ["no result"])[-1]
+                ctx.log(f"    FAILED {m}: {err[:160]}")
+        except Exception as e:
+            ctx.log(f"    ERROR {m}: {e}")
+        json.dump(results, open(os.path.join(ctx.dir, "tournament.json"), "w"), indent=2)
+    by = collections.defaultdict(list)
+    for r in results:
+        by[(r["grid"], r["n"])].append(r)
+    for (g, n), rs in sorted(by.items()):
+        top = max(rs, key=lambda r: r["cov"])
+        ctx.log(f"{g}x{g}/N={n}: best={top['variant']} cov {top['cov']*100:.0f}% conn {top['conn']*100:.0f}%")
+    ctx.metric(runs=len(results), methods=len({r["variant"] for r in results}),
+               best_cov=round(max((r["cov"] for r in results), default=0.0), 3))
+
+
 MANIFEST = [
     {"name": "belief-multiscale", "fn": belief_multiscale,
      "smoke": dict(scales=[(16, 4), (20, 5)], epochs=3, n_train=4, n_test=2, batch=4, steps=40),
@@ -231,5 +269,9 @@ MANIFEST = [
     {"name": "render-gifs", "fn": render_gifs,
      "smoke": dict(scales=[(16, 4)], steps=40),
      "gpu":   dict(scales=[(16, 4), (24, 6), (32, 10), (40, 16)], steps=120)},
+    {"name": "method-tournament", "fn": method_tournament,
+     "smoke": dict(methods=["independent"], scales=[(12, 3, 20)], seeds=1, envs=2, iters=2),
+     "gpu":   dict(methods=["independent", "CTDE", "joint", "frontier-attn"],
+                   scales=[(16, 4, 80), (24, 6, 100), (32, 10, 120)], seeds=3, envs=16, iters=200)},
     {"name": "assemble-report", "fn": assemble_report, "smoke": {}, "gpu": {}},
 ]

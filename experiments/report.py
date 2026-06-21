@@ -169,6 +169,32 @@ def build_report(runs, root):
                     f"<p class=m>Green = certainty field filling · amber dots = agents holding the network · "
                     f"grey lines = live comm graph · CONNECTED/SPLIT flag in each title.</p>"))
 
+    # ───────────────────────── F · MARL method tournament ─────────────────────────
+    tour = _load(runs, "method-tournament", "tournament.json")
+    if tour:
+        methods = sorted({r["variant"] for r in tour})
+        scl = sorted({(r["grid"], r["n"]) for r in tour})
+
+        def fT(ax):
+            x = np.arange(len(scl)); w = 0.8 / max(1, len(methods))
+            for mi, m in enumerate(methods):
+                ys = [float(np.mean([r["cov"] for r in tour if r["variant"] == m and (r["grid"], r["n"]) == s] or [0]))
+                      for s in scl]
+                ax.bar(x + (mi - len(methods) / 2) * w + w / 2, ys, w, label=m)
+            ax.set_xticks(x); ax.set_xticklabels([f"{g}²/{n}" for (g, n) in scl])
+            ax.set_ylabel("coverage"); ax.set_ylim(0, 1); ax.legend(fontsize=8); ax.grid(alpha=.3, axis="y")
+            ax.set_title("PPO coverage by method × scale (seed-avg)")
+        _fig(os.path.join(assets, "tournament.png"), fT, figsize=(8.6, 4.2))
+        row = "".join(f"<tr><td>{r['variant']}</td><td>{r['grid']}²</td><td>{r['n']}</td><td>{r['seed']}</td>"
+                      f"<td>{r['cov']*100:.0f}%</td><td>{r['conn']*100:.0f}%</td><td>{r['maxd']:.1f}</td></tr>"
+                      for r in sorted(tour, key=lambda r: (r["grid"], r["variant"], r["seed"])))
+        sec.append(("F — MARL method tournament (PPO, GPU)",
+                    f"<img src='report_assets/tournament.png'>"
+                    f"<p class=m>Each PPO variant trained per scale × seed. Coverage vs the centralization axis "
+                    f"(independent / CTDE / joint) plus the frontier-attention policy.</p>"
+                    f"<table><tr><th>method</th><th>world</th><th>N</th><th>seed</th><th>coverage</th>"
+                    f"<th>connectivity</th><th>max-dist</th></tr>{row}</table>"))
+
     # ───────────────────────── assemble ─────────────────────────
     body = ""
     for title, html_body in sec:

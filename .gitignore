@@ -27,6 +27,7 @@ experiments/*
 !experiments/_pareto_worker.py
 !experiments/_es_worker.py
 !experiments/report.py
+!experiments/marl_tournament.py
 
 # stray rendered media (examples/ render outputs, etc.)
 examples/**/*.gif
