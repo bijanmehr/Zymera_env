@@ -83,6 +83,7 @@ def rollout_mission(H, W, wall, n, comm_r, sense_r, steps, seed, policy, *, back
     home = pos0.mean(0)
     kb = [np.zeros((H, W)) for _ in range(n)]
     seen = [np.zeros((H, W), bool) for _ in range(n)]
+    own_seen = [np.zeros((H, W), bool) for _ in range(n)]   # ungossiped per-agent coverage → redundancy
     goals = [None] * n
     delivered = np.zeros((H, W), bool)
     disc_step = np.full((H, W), -1, int); deliv_step = np.full((H, W), -1, int)
@@ -98,7 +99,7 @@ def rollout_mission(H, W, wall, n, comm_r, sense_r, steps, seed, policy, *, back
             kb[i][pos[i, 0], pos[i, 1]] += 1.0
         vis = np.asarray(env.sensor.visibility(world))
         for i in range(n):
-            seen[i] |= vis[i]
+            seen[i] |= vis[i]; own_seen[i] |= vis[i]
         adj = comm_adj(pos, comm_r)
         comps = connected_components(adj); comp_of = {i: c for c in comps for i in c}
         if is_connected(adj):
@@ -165,13 +166,17 @@ def rollout_mission(H, W, wall, n, comm_r, sense_r, steps, seed, policy, *, back
     mask = (deliv_step >= 0) & ~wall
     lat = np.clip(deliv_step[mask] - disc_step[mask], 0, None)
     delivered_score = float((decay ** lat).sum() / free_total)
+    covered = int((raw & ~wall).sum())
+    own_sum = sum(int((own_seen[i] & ~wall).sum()) for i in range(n))
+    redundancy = own_sum / max(1, covered)            # Σ per-agent coverage / unique coverage; 1.0 = perfect division
     return dict(
         delivered_cov=float((delivered & ~wall).sum() / free_total),
         delivered_score=delivered_score,
-        raw_cov=float((raw & ~wall).sum() / free_total),
+        raw_cov=float(covered / free_total),
         connectivity=conn_hits / steps,
         safety_viol=safety_viol / max(1, n * steps),
         relay_frac=relay_steps / max(1, n * steps),
+        redundancy=round(redundancy, 3),
         per_agent_relay=[round(float(x), 3) for x in role_count / steps],
         wall=wall, frames=frames)
 

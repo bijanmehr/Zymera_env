@@ -40,3 +40,4 @@ examples/**/*.mp4
 *.gif
 *.npz
 *.eqx
+!experiments/coordination_test.py
