@@ -36,13 +36,18 @@ try:
 except Exception as e:                                  # frontier model may want a different obs — isolate it
     print(f"(frontier-attn unavailable: {e})", flush=True)
 
-# agent-attention (MAT-style) transformer policy + a size sweep (DIM, DEPTH)
+# transformer policies + size sweep (DIM, DEPTH): attn=full self-attention (centralized),
+# gattn=masked graph-attention over comm-graph neighbours (decentralized, connectivity-aware)
 ATTN_SIZES = {"attn-s": (32, 1), "attn": (64, 2), "attn-m": (96, 2), "attn-l": (128, 3)}
+GATTN_SIZES = {"gattn-s": (32, 1), "gattn": (64, 2), "gattn-m": (96, 2), "gattn-l": (128, 3)}
+SIZE_MAP = {**ATTN_SIZES, **GATTN_SIZES}
 try:
     import marl_attn                                    # noqa: E402
-    from marl_attn import AgentAttnAC                   # noqa: E402
+    from marl_attn import AgentAttnAC, GraphAttnAC      # noqa: E402
     for _name in ATTN_SIZES:
         MODELS[_name] = AgentAttnAC
+    for _name in GATTN_SIZES:
+        MODELS[_name] = GraphAttnAC
 except Exception as e:
     print(f"(attn unavailable: {e})", flush=True)
 
@@ -60,8 +65,8 @@ ENV_KW = dict(
 def main():
     if variant not in MODELS:
         print(f"unknown/unavailable variant {variant}", flush=True); sys.exit(2)
-    if variant in ATTN_SIZES:                           # set transformer size for this variant
-        marl_attn.DIM, marl_attn.DEPTH = ATTN_SIZES[variant]
+    if variant in SIZE_MAP:                             # set transformer size for this variant
+        marl_attn.DIM, marl_attn.DEPTH = SIZE_MAP[variant]
     env = cc.make_env(**ENV_KW)
     label = f"{variant}-{grid}x{grid}-n{nag}-s{seed}"
     os.makedirs(outdir, exist_ok=True)

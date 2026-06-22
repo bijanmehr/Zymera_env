@@ -358,7 +358,7 @@ MANIFEST = [
      "gpu":   dict(scales=[(16, 4), (24, 6), (32, 10), (40, 16)], steps=120)},
     {"name": "method-tournament", "fn": method_tournament,
      "smoke": dict(methods=["independent"], scales=[(12, 3, 20)], seeds=1, envs=2, iters=2),
-     "gpu":   dict(methods=["independent", "CTDE", "joint", "frontier-attn", "attn-s", "attn", "attn-l"],
+     "gpu":   dict(methods=["frontier-attn", "attn", "gattn-s", "gattn", "gattn-l"],
                    scales=[(16, 4, 80), (24, 6, 100), (32, 10, 120)], seeds=2, envs=16, iters=200)},
     {"name": "relay-mission", "fn": relay_mission,
      "smoke": dict(regimes=["A", "B"], scales=[(12, 3), (16, 4)], seeds=1, gens=2, pop=3,
