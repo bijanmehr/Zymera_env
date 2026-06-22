@@ -36,6 +36,16 @@ try:
 except Exception as e:                                  # frontier model may want a different obs — isolate it
     print(f"(frontier-attn unavailable: {e})", flush=True)
 
+# agent-attention (MAT-style) transformer policy + a size sweep (DIM, DEPTH)
+ATTN_SIZES = {"attn-s": (32, 1), "attn": (64, 2), "attn-m": (96, 2), "attn-l": (128, 3)}
+try:
+    import marl_attn                                    # noqa: E402
+    from marl_attn import AgentAttnAC                   # noqa: E402
+    for _name in ATTN_SIZES:
+        MODELS[_name] = AgentAttnAC
+except Exception as e:
+    print(f"(attn unavailable: {e})", flush=True)
+
 # the proven 32x32 reward recipe (run_marl_32.py), parameterized by scale:
 # spread + light capped connectivity + degree signal in the obs (policy self-regulates the comm graph)
 ENV_KW = dict(
@@ -50,6 +60,8 @@ ENV_KW = dict(
 def main():
     if variant not in MODELS:
         print(f"unknown/unavailable variant {variant}", flush=True); sys.exit(2)
+    if variant in ATTN_SIZES:                           # set transformer size for this variant
+        marl_attn.DIM, marl_attn.DEPTH = ATTN_SIZES[variant]
     env = cc.make_env(**ENV_KW)
     label = f"{variant}-{grid}x{grid}-n{nag}-s{seed}"
     os.makedirs(outdir, exist_ok=True)
