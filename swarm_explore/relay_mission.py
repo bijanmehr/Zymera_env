@@ -217,6 +217,49 @@ def make_theta_policy(theta, K):
     return policy
 
 
+def init_theta_n(F, seed=0, H=16):
+    """Generic F-feature -> H -> 1 role head (matches arch3's H=16; F=7 gives 145 params)."""
+    rng = np.random.default_rng(seed)
+    return np.concatenate([rng.normal(0, 0.5 / np.sqrt(F), F * H), np.zeros(H),
+                           rng.normal(0, 0.5 / np.sqrt(H), H), np.zeros(1)])
+
+
+def relay_prob_n(theta, feats, H=16):
+    F = len(feats); i = 0
+    W1 = theta[i:i + F * H].reshape(F, H); i += F * H
+    b1 = theta[i:i + H]; i += H
+    W2 = theta[i:i + H]; i += H
+    b2 = theta[i]
+    h = np.tanh(feats @ W1 + b1)
+    return 1.0 / (1.0 + np.exp(-(float(h @ W2) + b2)))
+
+
+def make_fiedler_policy(theta, K):
+    """Like make_theta_policy but the role head also sees the FIEDLER value λ₂ (global connectivity)
+    and the agent's own Fiedler-vector component — a connectivity signal. 9 features → init_theta_n(9)."""
+    def policy(pos, adj, comps, comp_of, core_node, core_comp, kb, seen, wall, nbr_pos, goals_prev, comm_r, n):
+        H_, W_ = wall.shape
+        L = np.diag(adj.sum(1)).astype(float) - adj
+        ev, evec = np.linalg.eigh(L)
+        lam2 = ev[1] / max(1, n); fied = evec[:, 1]           # λ₂ (normalized) + Fiedler vector
+        roles = np.zeros(n, int)
+        for i in range(n):
+            f7 = arch3._features(i, pos, adj, comp_of.get(i, [i]), kb[i], seen[i], wall, comm_r, K, H_, W_, n)
+            roles[i] = 1 if relay_prob_n(theta, np.concatenate([f7, [lam2, fied[i]]])) > 0.5 else 0
+        goals = [None] * n
+        for i in range(n):
+            src = (int(pos[i, 0]), int(pos[i, 1])); dist, parent = bfs(seen[i] & ~wall, src)
+            if roles[i] == 1:
+                g = herd_target(i, pos, adj, nbr_pos[i], seen[i], wall, dist)
+            else:
+                g = goals_prev[i]
+                if g is None or src == g or not np.isfinite(dist[g[0], g[1]]) or kb[i][g[0], g[1]] >= 1.0:
+                    g = _choose_target(kb[i], seen[i], wall, src, dist, [], nbr_pos[i], comm_r, 0.0)
+            goals[i] = g
+        return roles, goals
+    return policy
+
+
 def main():
     import os
     from . import gif

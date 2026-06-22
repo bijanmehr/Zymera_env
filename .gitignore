@@ -31,6 +31,8 @@ experiments/*
 !experiments/_relay_es_worker.py
 !experiments/relay_mission_spec.md
 !experiments/relay_param_sweep.py
+!experiments/_relay_exp_worker.py
+!experiments/relay_experiments.py
 
 # stray rendered media (examples/ render outputs, etc.)
 examples/**/*.gif

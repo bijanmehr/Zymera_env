@@ -38,8 +38,9 @@ except Exception as e:                                  # frontier model may wan
 
 # transformer policies + size sweep (DIM, DEPTH): attn=full self-attention (centralized),
 # gattn=masked graph-attention over comm-graph neighbours (decentralized, connectivity-aware)
-ATTN_SIZES = {"attn-s": (32, 1), "attn": (64, 2), "attn-m": (96, 2), "attn-l": (128, 3)}
-GATTN_SIZES = {"gattn-s": (32, 1), "gattn": (64, 2), "gattn-m": (96, 2), "gattn-l": (128, 3)}
+ATTN_SIZES = {"attn-s": (32, 1), "attn": (64, 2), "attn-m": (96, 2), "attn-l": (128, 3), "attn-d4": (64, 4)}
+GATTN_SIZES = {"gattn-s": (32, 1), "gattn": (64, 2), "gattn-m": (96, 2), "gattn-l": (128, 3),
+               "gattn-d4": (64, 4), "gattn-d6": (64, 6)}    # depth sweep = more hops = more global reach
 SIZE_MAP = {**ATTN_SIZES, **GATTN_SIZES}
 try:
     import marl_attn                                    # noqa: E402
